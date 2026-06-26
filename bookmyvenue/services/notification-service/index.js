@@ -29,13 +29,14 @@ const run = async () => {
     eachMessage: async ({ topic, partition, message }) => {
       try {
         const data = JSON.parse(message.value.toString());
+        let status = false;
 
-        // TODO: use a factory class and interface for diff notifier types 
+        // TODO: use a factory class for diff notifier types 
         // when multiple notification channel comes
         switch (data.type) {
           case "EMAIL":
             const mailer = new MailService(data);
-            const status = await mailer.send();
+            status = await mailer.send();
 
           default:
             app.log.info(`${data.type} not implemented`)
@@ -45,9 +46,14 @@ const run = async () => {
 
         // for analytics
         await producer.send({
-          topic: "notification-success",
+          topic: "analytics-service",
           messages: [
-            { value: JSON.stringify({ type: data.type, status }) },
+            { 
+              value: JSON.stringify({ 
+                type: data.type, 
+                status 
+              }) 
+            },
           ],
         });
 
@@ -56,9 +62,14 @@ const run = async () => {
 
         // for analytics
         await producer.send({
-          topic: "notification-error",
+          topic: "analytics-service",
           messages: [
-            { value: JSON.stringify({ type: data.type, status }) },
+            { 
+              value: JSON.stringify({ 
+                type: data.type, 
+                status: false 
+              }) 
+            },
           ],
         });
       }
@@ -80,3 +91,4 @@ await run();
 
 // TODO: remove the try-catch to keep the msge in topic in case of error for retry
 // TODO: and use a DLQ to keep the retiried msges (min-2 times)
+// TODO: move kafka code to seperate file
