@@ -1,0 +1,118 @@
+# bookmyvenue/docker-compose.yml
+
+networks:
+  bmv_public:       # traefik-facing — services that receive external traffic
+    driver: bridge
+  bmv_internal:     # service-to-service + infra — never exposed publicly
+    driver: bridge
+
+volumes:
+  postgres_data:
+  minio_data:
+  traefik_certs:
+
+include:
+  - services/media-service/docker-compose.yml   # add one line per service as you build them
+
+services:
+
+  # ── Traefik ────────────────────────────────────────────────────────────────
+  traefik:
+    image: traefik:v3.1
+    restart: unless-stopped
+    ports:
+      - "80:80"       # http (redirects to https in prod)
+      - "443:443"     # https
+      - "8080:8080"   # dashboard — remove in prod
+    command:
+      - --api.insecure=true                        # dashboard, dev only
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false  # services must opt-in
+      - --providers.docker.network=bmv_public      # only route on this network
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --log.level=INFO
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik_certs:/letsencrypt
+    networks:
+      - bmv_public
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - bmv_internal          # not on bmv_public — unreachable from outside
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+  
+  # ── PgBouncer ───────────────────────────────────────────────────────────────
+  pgbouncer:
+    image: bitnami/pgbouncer:latest
+    restart: unless-stopped
+    environment:
+      POSTGRESQL_HOST: postgres
+      POSTGRESQL_PORT: 5432
+      POSTGRESQL_USERNAME: ${POSTGRES_USER}
+      POSTGRESQL_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRESQL_DATABASE: ${POSTGRES_DB}
+      PGBOUNCER_POOL_MODE: transaction
+      PGBOUNCER_MAX_CLIENT_CONN: 100      # max connections from all services combined
+      PGBOUNCER_DEFAULT_POOL_SIZE: 20     # actual connections to postgres
+      PGBOUNCER_MIN_POOL_SIZE: 5          # keep 5 warm connections always
+      PGBOUNCER_RESERVE_POOL_SIZE: 5      # emergency extra connections under spike
+      PGBOUNCER_RESERVE_POOL_TIMEOUT: 3
+      PGBOUNCER_SERVER_IDLE_TIMEOUT: 600
+    networks:
+      - bmv_internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "localhost", "-p", "5432"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ── MinIO ───────────────────────────────────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio_data:/data
+    networks:
+      - bmv_internal          # media-service talks to minio internally
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
