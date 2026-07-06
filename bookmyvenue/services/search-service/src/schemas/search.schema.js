@@ -112,6 +112,30 @@ export const searchVenueSchema = {
                     type: "string"
                 },
 
+                page: {
+                    type: "integer",
+                    minimum: 1
+                },
+
+                limit: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 100
+                },
+
+                totalPages: {
+                    type: "integer",
+                    minimum: 0
+                },
+
+                hasNextPage: {
+                    type: "boolean"
+                },
+
+                hasPreviousPage: {
+                    type: "boolean"
+                },
+
                 results: {
                     type: "array",
 
@@ -164,7 +188,12 @@ export const searchVenueSchema = {
             required: [
                 "count",
                 "time",
-                "results"
+                "results",
+                "page",
+                "limit",
+                "totalPages",
+                "hasNextPage",
+                "hasPreviousPage"
             ]
         }
     }
