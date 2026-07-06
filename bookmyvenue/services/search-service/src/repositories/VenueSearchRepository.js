@@ -7,17 +7,24 @@ export default class VenueSearchRepository {
             index: "venues",
             ...query,
         });
-        const res = response.hits.hits.map(hit => ({
+        const results = response.hits.hits.map(hit => ({
             score: hit._score,
             ...hit._source
         }));
 
-        console.log(res)
+        const total = response.hits.total.value;
+        const page = Number(filters.page ?? 1);
+        const limit = Number(filters.limit ?? 20);
 
         return {
-            count: response.hits.total.value,
-            time: response.took + "ms",
-            results: res
-        }
+            count: total,
+            page,
+            limit,
+            totalPages: Math.ceil(total / limit),
+            hasNextPage: page * limit < total,
+            hasPreviousPage: page > 1,
+            time: `${response.took}ms`,
+            results
+        };
     }
 }
