@@ -1,118 +1,235 @@
-# bookmyvenue/docker-compose.yml
-
 networks:
-  bmv_public:       # traefik-facing — services that receive external traffic
+  bmv_public:
     driver: bridge
-  bmv_internal:     # service-to-service + infra — never exposed publicly
+
+  bmv_internal:
     driver: bridge
 
 volumes:
-  postgres_data:
-  minio_data:
+  postgres_primary_data:
+  postgres_replica_data:
+  redis_data:
   traefik_certs:
 
 include:
-  - services/media-service/docker-compose.yml   # add one line per service as you build them
+  - services/search-service/docker-compose.yml
 
 services:
 
-  # ── Traefik ────────────────────────────────────────────────────────────────
+  # ───────────────────────────────────────────────────────────────
+  # Traefik
+  # ───────────────────────────────────────────────────────────────
+
   traefik:
     image: traefik:v3.1
     restart: unless-stopped
-    ports:
-      - "80:80"       # http (redirects to https in prod)
-      - "443:443"     # https
-      - "8080:8080"   # dashboard — remove in prod
+
     command:
-      - --api.insecure=true                        # dashboard, dev only
+      - --api.insecure=true
       - --providers.docker=true
-      - --providers.docker.exposedbydefault=false  # services must opt-in
-      - --providers.docker.network=bmv_public      # only route on this network
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=bmv_public
       - --entrypoints.web.address=:80
       - --entrypoints.websecure.address=:443
       - --log.level=INFO
+
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"
+
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - traefik_certs:/letsencrypt
+
     networks:
       - bmv_public
+
     healthcheck:
       test: ["CMD", "traefik", "healthcheck", "--ping"]
       interval: 10s
       timeout: 5s
       retries: 3
 
-  # ── PostgreSQL ──────────────────────────────────────────────────────────────
-  postgres:
+  # ───────────────────────────────────────────────────────────────
+  # PostgreSQL Primary
+  # ───────────────────────────────────────────────────────────────
+
+  postgres-primary:
     image: postgres:16-alpine
+
     restart: unless-stopped
+
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_replication_slots=10
+      - -c
+      - max_wal_senders=10
+
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
+
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_primary_data:/var/lib/postgresql/data
+
     networks:
-      - bmv_internal          # not on bmv_public — unreachable from outside
+      - bmv_internal
+
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
-    deploy:
-      resources:
-        limits:
-          cpus: "1.0"
-          memory: 512M
-  
-  # ── PgBouncer ───────────────────────────────────────────────────────────────
-  pgbouncer:
-    image: bitnami/pgbouncer:latest
+
+  # ───────────────────────────────────────────────────────────────
+  # PostgreSQL Replica
+  # (Replication configuration added later)
+  # ───────────────────────────────────────────────────────────────
+
+  postgres-replica:
+    image: postgres:16-alpine
+
     restart: unless-stopped
+
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+
+    networks:
+      - bmv_internal
+
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ───────────────────────────────────────────────────────────────
+  # PgBouncer (WRITE)
+  # Applications connect here for writes
+  # host = postgres-write
+  # ───────────────────────────────────────────────────────────────
+
+  postgres-write:
+    image: edoburu/pgbouncer:latest
+
+    restart: unless-stopped
+
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+
     environment:
-      POSTGRESQL_HOST: postgres
+      POSTGRESQL_HOST: postgres-primary
       POSTGRESQL_PORT: 5432
       POSTGRESQL_USERNAME: ${POSTGRES_USER}
       POSTGRESQL_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRESQL_DATABASE: ${POSTGRES_DB}
+
       PGBOUNCER_POOL_MODE: transaction
-      PGBOUNCER_MAX_CLIENT_CONN: 100      # max connections from all services combined
-      PGBOUNCER_DEFAULT_POOL_SIZE: 20     # actual connections to postgres
-      PGBOUNCER_MIN_POOL_SIZE: 5          # keep 5 warm connections always
-      PGBOUNCER_RESERVE_POOL_SIZE: 5      # emergency extra connections under spike
-      PGBOUNCER_RESERVE_POOL_TIMEOUT: 3
+      PGBOUNCER_MAX_CLIENT_CONN: 500
+      PGBOUNCER_DEFAULT_POOL_SIZE: 50
+      PGBOUNCER_MIN_POOL_SIZE: 10
+      PGBOUNCER_RESERVE_POOL_SIZE: 10
       PGBOUNCER_SERVER_IDLE_TIMEOUT: 600
+
     networks:
       - bmv_internal
-    depends_on:
-      postgres:
-        condition: service_healthy
+
     healthcheck:
-      test: ["CMD", "pg_isready", "-h", "localhost", "-p", "5432"]
+      test: ["CMD", "pg_isready", "-h", "localhost"]
       interval: 10s
       timeout: 5s
       retries: 3
 
-  # ── MinIO ───────────────────────────────────────────────────────────────────
-  minio:
-    image: minio/minio:latest
+  # ───────────────────────────────────────────────────────────────
+  # PgBouncer (READ)
+  # Applications connect here for reads
+  # host = postgres-read
+  # ───────────────────────────────────────────────────────────────
+
+  postgres-read:
+    image: edoburu/pgbouncer:latest
+
     restart: unless-stopped
-    command: server /data --console-address ":9001"
+
+    depends_on:
+      postgres-replica:
+        condition: service_started
+
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-    volumes:
-      - minio_data:/data
+      POSTGRESQL_HOST: postgres-replica
+      POSTGRESQL_PORT: 5432
+      POSTGRESQL_USERNAME: ${POSTGRES_USER}
+      POSTGRESQL_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRESQL_DATABASE: ${POSTGRES_DB}
+
+      PGBOUNCER_POOL_MODE: transaction
+      PGBOUNCER_MAX_CLIENT_CONN: 500
+      PGBOUNCER_DEFAULT_POOL_SIZE: 50
+      PGBOUNCER_MIN_POOL_SIZE: 10
+      PGBOUNCER_RESERVE_POOL_SIZE: 10
+      PGBOUNCER_SERVER_IDLE_TIMEOUT: 600
+
     networks:
-      - bmv_internal          # media-service talks to minio internally
+      - bmv_internal
+
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: ["CMD", "pg_isready", "-h", "localhost"]
       interval: 10s
       timeout: 5s
       retries: 3
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: 256M
+
+  # ───────────────────────────────────────────────────────────────
+  # Redis
+  # ───────────────────────────────────────────────────────────────
+
+  redis:
+    image: redis:7-alpine
+
+    restart: unless-stopped
+
+    command: >
+      redis-server
+      --appendonly yes
+
+    volumes:
+      - redis_data:/data
+
+    networks:
+      - bmv_internal
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ───────────────────────────────────────────────────────────────
+  # Sequin
+  # Connects directly to PostgreSQL Primary
+  # NOT through PgBouncer
+  # ───────────────────────────────────────────────────────────────
+
+  sequin:
+    image: sequin/sequin:latest
+
+    restart: unless-stopped
+
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-primary:5432/${POSTGRES_DB}
+
+    ports:
+      - "7376:7376"
+
+    networks:
+      - bmv_internal
