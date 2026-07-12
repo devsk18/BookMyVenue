@@ -1,10 +1,11 @@
-import { Building2, CalendarCheck, Heart, LayoutDashboard, LogOut, Settings } from "lucide-react";
+import { Building2, CalendarCheck, Heart, LayoutDashboard, LogOut, Search, Settings } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import keycloak from "../configs/keycloak";
 
 export default function Sidebar() {
   const navItems = [
     { name: 'Dashboard', path: '/', icon: <LayoutDashboard size={20} /> },
+    { name: 'Search Venue', path: '/search', icon: <Search size={20} />, target: "_blank" },
     { name: 'My Bookings', path: '/bookings', icon: <CalendarCheck size={20} /> },
     { name: 'Saved Venues', path: '/saved', icon: <Heart size={20} /> },
     { name: 'Settings', path: '/settings', icon: <Settings size={20} /> },
@@ -24,6 +25,7 @@ export default function Sidebar() {
             <NavLink
               key={item.name}
               to={item.path}
+              target={item.target || "_self"}
               className={({ isActive }) =>
                 `flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 font-medium ${
                   isActive

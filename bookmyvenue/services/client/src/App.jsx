@@ -10,6 +10,7 @@ import Bookings from './pages/Bookings';
 import Unauthorized from './pages/Unauthorized';
 import ProtectedRoute from './layouts/guards/ProtectedRoute';
 import Home from './pages/Home';
+import SearchPage from './pages/SearchPage';
 
 const queryClient = new QueryClient();
 
@@ -46,13 +47,14 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<Home />} />
+          <Route path="/search" element={<SearchPage />} />
           <Route path="/unauthorized" element={<Unauthorized />} />
 
           {/* Protected Routes Wrapper */}
           <Route element={<Layout />}>
             
             {/* Common Protected Routes (Both Users and Venue Owners) */}
-            <Route element={<ProtectedRoute />}>
+            <Route element={<ProtectedRoute allowedRoles={['user', 'venue_owner']}/>}>
               <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/bookings" element={<Bookings />} />
               <Route path="/settings" element={<div><h2>Profile Settings</h2></div>} />

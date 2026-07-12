@@ -13,7 +13,7 @@ export default function createVenueQuery (requestFilters) {
     };
 
     for (const filter of filters) {
-        filter(query.query, requestFilters);
+        filter(query, requestFilters);
     }
 
     return query;
