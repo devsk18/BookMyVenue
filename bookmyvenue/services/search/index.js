@@ -1,11 +1,11 @@
 import Fastify from "fastify";
-import cors from "cors";
 import dotenv from "dotenv";
 import elasticsearch from "./src/configs/elasticsearch.js";
 import searchRoute from "./src/routes/search.route.js";
 import fastifySwagger from "@fastify/swagger";
 import { swagger, swaggerUI } from "./src/configs/swagger.js";
 import fastifySwaggerUi from "@fastify/swagger-ui";
+import cors from "@fastify/cors";
 
 dotenv.config();
 
@@ -14,8 +14,8 @@ const app = Fastify({
 });
 
 await app.register(cors, {
-  origin: '*',
-  methods: ['GET'],
+  origin: ["http://localhost:5173", "http://127.0.0.1:5173"],
+  methods: ["GET", "OPTIONS"],
 });
 
 app.register(fastifySwagger, swagger)
